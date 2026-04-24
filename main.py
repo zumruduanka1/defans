@@ -1,11 +1,36 @@
 from flask import Flask, request, jsonify
-import requests, time, random, os
+import requests, time, random, os, smtplib, hashlib
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
+import xml.etree.ElementTree as ET
 
 app = Flask(__name__)
 
-# ---------- AI ----------
+cache = []
+seen = set()
+last = 0
+
+# ---------------- EMAIL ----------------
+def send_email(text, risk):
+    try:
+        user = os.getenv("tubitaktest0@gmail.com")
+        pw = os.getenv("umdyxtmpeljhodhy")
+        to = os.getenv("rumeyysauslu@gmail.com")
+
+        if not user or not pw or not to:
+            return
+
+        s = smtplib.SMTP("smtp.gmail.com", 587)
+        s.starttls()
+        s.login(user, pw)
+
+        msg = f"Subject: DEFANS ALERT\n\n{text}\nRisk: %{risk}"
+        s.sendmail(user, to, msg)
+        s.quit()
+    except:
+        pass
+
+# ---------------- AI ----------------
 def ai_score(text):
     try:
         key = os.getenv("HF_API_KEY")
@@ -28,57 +53,143 @@ def ai_score(text):
     except:
         return None
 
-# ---------- BASE ----------
-def base_score(t):
-    t = t.lower()
+# ---------------- RISK ----------------
+def base_score(text):
+    t = text.lower()
     s = 30
-    if "şok" in t: s+=20
-    if "iddia" in t: s+=20
-    if "gizli" in t: s+=15
-    return min(95, s)
+    if "şok" in t or "ifşa" in t: s += 25
+    if "iddia" in t: s += 20
+    if "gizli" in t: s += 15
+    if "kanıtlandı" in t: s += 15
+    if "uzman" in t: s -= 15
+    return max(5, min(95, s))
 
 def risk_score(text):
     ai = ai_score(text)
     base = base_score(text)
-    return int(ai*0.6+base*0.4) if ai else base
+    return int(ai*0.6 + base*0.4) if ai else base
 
-# ---------- URL ----------
+# ---------------- FILTER ----------------
+def is_news(text):
+    if not text:
+        return False
+    t = text.lower()
+    return len(t) > 40 and any(k in t for k in ["haber","iddia","son dakika","gündem"])
+
+# ---------------- URL ----------------
 def extract_url(url):
     try:
         r = requests.get(url, timeout=5)
-        soup = BeautifulSoup(r.text,"html.parser")
+        soup = BeautifulSoup(r.text, "html.parser")
         return soup.title.string
     except:
         return None
 
-# ---------- MEDIA ----------
+# ---------------- MEDIA ----------------
 def extract_media(url):
     name = urlparse(url).path.split("/")[-1]
-    return name.replace("-", " ")
+    return name.replace("-", " ").replace("_", " ")
 
-# ---------- FAKE SOCIAL ----------
-def social():
-    topics = ["deprem","ekonomi","seçim"]
-    return [f"{random.choice(topics)} hakkında şok iddia"]*10
+# ---------------- RSS ----------------
+def parse_rss(url, source):
+    data = []
+    try:
+        r = requests.get(url, timeout=5)
+        root = ET.fromstring(r.content)
 
-# ---------- API ----------
+        for i in root.findall(".//item")[:10]:
+            title = i.find("title").text
+            link = i.find("link").text
+            data.append((title, source, link))
+    except:
+        pass
+    return data
+
+# ---------------- SOSYAL ----------------
+def social_feed():
+    topics = ["deprem","ekonomi","seçim","aşı","savaş"]
+    words = ["şok","ifşa","gizli","büyük iddia"]
+    return [
+        (f"{random.choice(topics)} hakkında {random.choice(words)}", "Sosyal Medya", "#")
+        for _ in range(20)
+    ]
+
+# ---------------- DATA ----------------
+def collect():
+    data = []
+    data += parse_rss("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr","Google")
+    data += parse_rss("https://www.ntv.com.tr/son-dakika.rss","NTV")
+    data += parse_rss("https://www.bbc.com/turkce/index.xml","BBC")
+    data += parse_rss("https://teyit.org/feed","Teyit")
+    data += social_feed()
+    return data
+
+# ---------------- REFRESH ----------------
+def refresh():
+    global cache, last
+
+    if time.time() - last < 20:
+        return
+
+    last = time.time()
+    raw = collect()
+
+    out = []
+
+    for text, source, link in raw:
+        key = hashlib.md5(text.encode()).hexdigest()
+        if key in seen:
+            continue
+
+        seen.add(key)
+
+        if not is_news(text):
+            continue
+
+        r = risk_score(text)
+
+        if r >= 50:
+            out.append({
+                "text": text,
+                "risk": r,
+                "source": source,
+                "link": link
+            })
+
+        # 🔴 MAIL (70+)
+        if r >= 70:
+            send_email(text, r)
+
+    cache = out[:30]
+
+# ---------------- API ----------------
+@app.route("/api/news")
+def news():
+    refresh()
+    return {"data": cache}
+
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
-    t = request.json.get("text")
+    data = request.get_json()
+    text = data.get("text")
 
-    if t.startswith("http"):
-        if any(x in t for x in [".jpg",".png",".mp4"]):
-            t = extract_media(t)
+    if text.startswith("http"):
+        if any(x in text for x in [".jpg",".png",".jpeg",".mp4",".webm"]):
+            text = extract_media(text)
         else:
-            t = extract_url(t)
+            text = extract_url(text)
 
-    if not t or len(t)<20:
-        return {"error":"Geçerli haber gir"}
+    if not text or not is_news(text):
+        return {"error":"Bu bir haber değil"}
 
-    r = risk_score(t)
+    r = risk_score(text)
+
+    if r >= 70:
+        send_email(text, r)
+
     return {"risk": r}
 
-# ---------- UI ----------
+# ---------------- UI ----------------
 @app.route("/")
 def home():
     return """
@@ -106,7 +217,7 @@ input{padding:10px;width:70%}
 <div class="card"><h3>Durum</h3><h1>Aktif</h1></div>
 
 <div class="card big">
-<input id="txt" placeholder="URL / haber / görsel">
+<input id="txt" placeholder="URL / haber / görsel / video">
 <button onclick="go()">Analiz</button>
 <h2 id="res"></h2>
 </div>
@@ -117,6 +228,21 @@ input{padding:10px;width:70%}
 </div>
 
 <script>
+async function load(){
+ let r=await fetch("/api/news")
+ let j=await r.json()
+
+ let html=""
+ j.data.forEach(x=>{
+  html+=`<div style='padding:10px'>
+  <a href='${x.link}' target='_blank'>${x.text}</a>
+  <br>Risk: %${x.risk} | ${x.source}
+  </div>`
+ })
+
+ document.getElementById("list").innerHTML=html
+}
+
 async function go(){
  let t=document.getElementById("txt").value
 
@@ -129,13 +255,16 @@ async function go(){
  let j=await r.json()
  res.innerText=j.error || "Risk: %"+j.risk
 }
+
+setInterval(load,20000)
+load()
 </script>
 
 </body>
 </html>
 """
 
-# ---------- RUN ----------
+# ---------------- RUN ----------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT",10000))
     app.run(host="0.0.0.0", port=port)
