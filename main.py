@@ -44,7 +44,7 @@ def ai_score(text):
                 "inputs": text,
                 "parameters": {"candidate_labels": ["fake news","true news"]}
             },
-            timeout=6
+            timeout=5
         )
 
         data = r.json()
@@ -71,8 +71,7 @@ def risk_score(text, source=None):
     ai = ai_score(text)
     base = base_score(text)
 
-    # sosyal medya boost
-    if source in ["X","Reddit","TikTok","Instagram","Forum","Blog"]:
+    if source in ["X","Reddit","TikTok","Instagram","Forum","Blog","Telegram"]:
         base += 15
 
     return int(ai*0.6 + base*0.4) if ai else base
@@ -81,9 +80,16 @@ def risk_score(text, source=None):
 def is_news(text):
     if not text:
         return False
+
     t = text.lower()
-    keywords = ["haber","iddia","son dakika","gündem","şok","ifşa"]
-    return len(t) > 30 and any(k in t for k in keywords)
+
+    keywords = [
+        "haber","iddia","son dakika","gündem",
+        "şok","ifşa","açıklandı","duyuruldu",
+        "kanıtlandı","sızdırıldı"
+    ]
+
+    return len(t) > 25 and any(k in t for k in keywords)
 
 # ---------------- URL ----------------
 def extract_url(url):
@@ -114,8 +120,8 @@ def parse_rss(url, source):
         pass
     return data
 
-# ---------------- SOSYAL GERÇEKÇİ ----------------
-def social_realistic_feed():
+# ---------------- SOSYAL ----------------
+def social_feed():
     platforms = ["X","Reddit","TikTok","Instagram","Forum","Blog","Telegram"]
 
     patterns = [
@@ -124,20 +130,17 @@ def social_realistic_feed():
         "Bu video hızla yayılıyor: {topic}",
         "{topic} hakkında gerçekler saklanıyor mu?",
         "{topic} konusunda büyük oyun ortaya çıktı",
-        "Kimse bunu konuşmuyor: {topic}",
-        "{topic} hakkında kanıtlandığı iddia edilen bilgi"
+        "Kimse bunu konuşmuyor: {topic}"
     ]
 
-    topics = ["deprem","seçim","ekonomi","aşı","savaş","yapay zeka","kripto","gıda krizi"]
+    topics = ["deprem","seçim","ekonomi","aşı","savaş","yapay zeka","kripto"]
 
-    data = []
-    for _ in range(40):
-        topic = random.choice(topics)
-        text = random.choice(patterns).format(topic=topic)
-
-        data.append((text, random.choice(platforms), "#"))
-
-    return data
+    return [
+        (random.choice(patterns).format(topic=random.choice(topics)),
+         random.choice(platforms),
+         "#")
+        for _ in range(50)
+    ]
 
 # ---------------- DATA ----------------
 def collect():
@@ -145,20 +148,16 @@ def collect():
     data += parse_rss("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr","Google")
     data += parse_rss("https://www.ntv.com.tr/son-dakika.rss","NTV")
     data += parse_rss("https://www.bbc.com/turkce/index.xml","BBC")
-    data += parse_rss("https://www.trthaber.com/manset_articles.rss","TRT")
-    data += parse_rss("https://www.hurriyet.com.tr/rss/gundem","Hürriyet")
     data += parse_rss("https://teyit.org/feed","Teyit")
     data += parse_rss("https://www.snopes.com/feed/","Snopes")
-
-    data += social_realistic_feed()
-
+    data += social_feed()
     return data
 
 # ---------------- REFRESH ----------------
 def refresh():
     global cache, last
 
-    if time.time() - last < 20:
+    if time.time() - last < 10:
         return
 
     last = time.time()
@@ -189,7 +188,7 @@ def refresh():
         if r >= 70:
             send_email(text, r)
 
-    cache = out[:40]
+    cache = (out + cache)[:100]
 
 # ---------------- API ----------------
 @app.route("/api/news")
@@ -209,14 +208,18 @@ def analyze():
             text = extract_url(text)
 
     if not text or not is_news(text):
-        return {"error":"Geçerli haber gir"}
+        return {"error":"Bu bir haber formatı değil"}
 
     r = risk_score(text)
+
+    fake_patterns = ["uzaylı","dünya yok olacak","%100 gerçek","herkes saklıyor"]
+    if any(x in text.lower() for x in fake_patterns):
+        r += 25
 
     if r >= 70:
         send_email(text, r)
 
-    return {"risk": r}
+    return {"risk": min(r, 95)}
 
 # ---------------- UI ----------------
 @app.route("/")
@@ -233,7 +236,7 @@ body{background:#0f172a;color:white;font-family:Arial}
 .big{grid-column:span 3}
 button{background:#22c55e;padding:10px;border:none}
 input{padding:10px;width:70%}
-.list{max-height:400px;overflow:auto}
+.list{max-height:600px;overflow-y:auto}
 </style>
 </head>
 <body>
@@ -243,20 +246,9 @@ input{padding:10px;width:70%}
 
 <div class="grid">
 
-<div class="card">
-<h3>Durum</h3>
-<h1>Aktif</h1>
-</div>
-
-<div class="card">
-<h3>Kaynak</h3>
-<h1>Sosyal + Web</h1>
-</div>
-
-<div class="card">
-<h3>AI</h3>
-<h1>ON</h1>
-</div>
+<div class="card"><h3>Durum</h3><h1>Aktif</h1></div>
+<div class="card"><h3>Kaynak</h3><h1>Sosyal + Web</h1></div>
+<div class="card"><h3>AI</h3><h1>ON</h1></div>
 
 <div class="card big">
 <input id="txt" placeholder="URL / haber / görsel / video">
@@ -281,6 +273,8 @@ async function load(){
   <br>
   <span style="color:#22c55e">Risk: %${x.risk}</span> |
   <span style="color:#aaa">${x.source}</span>
+  <br>
+  <span style="color:red">${x.risk>70?"Yalan Haber Riski Yüksek":""}</span>
   </div>`
  })
 
@@ -300,7 +294,7 @@ async function go(){
  res.innerText=j.error || "Risk: %"+j.risk
 }
 
-setInterval(load,20000)
+setInterval(load,10000)
 load()
 </script>
 
