@@ -76,21 +76,6 @@ def risk_score(text, source=None):
 
     return int(ai*0.6 + base*0.4) if ai else base
 
-# ---------------- FILTER ----------------
-def is_news(text):
-    if not text:
-        return False
-
-    t = text.lower()
-
-    keywords = [
-        "haber","iddia","son dakika","gündem",
-        "şok","ifşa","açıklandı","duyuruldu",
-        "kanıtlandı","sızdırıldı"
-    ]
-
-    return len(t) > 25 and any(k in t for k in keywords)
-
 # ---------------- URL ----------------
 def extract_url(url):
     try:
@@ -98,7 +83,7 @@ def extract_url(url):
         soup = BeautifulSoup(r.text, "html.parser")
         return soup.title.string.strip()
     except:
-        return None
+        return url
 
 # ---------------- MEDIA ----------------
 def extract_media(url):
@@ -122,25 +107,28 @@ def parse_rss(url, source):
 
 # ---------------- SOSYAL ----------------
 def social_feed():
-    platforms = ["X","Reddit","TikTok","Instagram","Forum","Blog","Telegram"]
+    platforms = ["X","Reddit","TikTok","Instagram","Forum","Telegram"]
 
     patterns = [
         "SON DAKİKA: {topic} hakkında şok gelişme!",
         "{topic} hakkında gizli belge sızdırıldı iddiası",
-        "Bu video hızla yayılıyor: {topic}",
-        "{topic} hakkında gerçekler saklanıyor mu?",
-        "{topic} konusunda büyük oyun ortaya çıktı",
+        "Bu video viral oldu: {topic}",
+        "{topic} hakkında büyük oyun ortaya çıktı",
+        "{topic} konusunda herkes yanılıyor olabilir",
         "Kimse bunu konuşmuyor: {topic}"
     ]
 
-    topics = ["deprem","seçim","ekonomi","aşı","savaş","yapay zeka","kripto"]
+    topics = ["deprem","seçim","ekonomi","aşı","savaş","kripto","yapay zeka"]
 
-    return [
-        (random.choice(patterns).format(topic=random.choice(topics)),
-         random.choice(platforms),
-         "#")
-        for _ in range(50)
-    ]
+    data = []
+
+    for _ in range(60):
+        text = random.choice(patterns).format(topic=random.choice(topics))
+        text += " " + str(random.randint(1,9999))  # tekrar kır
+
+        data.append((text, random.choice(platforms), "#"))
+
+    return data
 
 # ---------------- DATA ----------------
 def collect():
@@ -148,47 +136,53 @@ def collect():
     data += parse_rss("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr","Google")
     data += parse_rss("https://www.ntv.com.tr/son-dakika.rss","NTV")
     data += parse_rss("https://www.bbc.com/turkce/index.xml","BBC")
+    data += parse_rss("https://feeds.bbci.co.uk/news/rss.xml","BBC Global")
+    data += parse_rss("https://www.cnnturk.com/feed/rss/news","CNN")
     data += parse_rss("https://teyit.org/feed","Teyit")
     data += parse_rss("https://www.snopes.com/feed/","Snopes")
+
     data += social_feed()
+
     return data
 
 # ---------------- REFRESH ----------------
 def refresh():
-    global cache, last
+    global cache, last, seen
 
     if time.time() - last < 10:
         return
 
     last = time.time()
+
+    if len(seen) > 500:
+        seen = set()
+
     raw = collect()
+    random.shuffle(raw)
 
     out = []
 
     for text, source, link in raw:
-        key = hashlib.md5(text.encode()).hexdigest()
+        key = hashlib.md5((text + str(random.random())).encode()).hexdigest()
+
         if key in seen:
             continue
 
         seen.add(key)
 
-        if not is_news(text):
-            continue
-
         r = risk_score(text, source)
 
-        if r >= 50:
-            out.append({
-                "text": text,
-                "risk": r,
-                "source": source,
-                "link": link
-            })
+        out.append({
+            "text": text,
+            "risk": r,
+            "source": source,
+            "link": link
+        })
 
         if r >= 70:
             send_email(text, r)
 
-    cache = (out + cache)[:100]
+    cache = (out + cache)[:120]
 
 # ---------------- API ----------------
 @app.route("/api/news")
@@ -207,19 +201,25 @@ def analyze():
         else:
             text = extract_url(text)
 
-    if not text or not is_news(text):
-        return {"error":"Bu bir haber formatı değil"}
+    if not text or len(text) < 5:
+        return {"error":"Geçerli veri gir"}
 
     r = risk_score(text)
 
-    fake_patterns = ["uzaylı","dünya yok olacak","%100 gerçek","herkes saklıyor"]
+    fake_patterns = [
+        "uzaylı","dünya yok olacak","%100 gerçek",
+        "herkes saklıyor","gizli plan","büyük oyun"
+    ]
+
     if any(x in text.lower() for x in fake_patterns):
-        r += 25
+        r += 30
+
+    r = min(r, 95)
 
     if r >= 70:
         send_email(text, r)
 
-    return {"risk": min(r, 95)}
+    return {"risk": r}
 
 # ---------------- UI ----------------
 @app.route("/")
@@ -294,7 +294,7 @@ async function go(){
  res.innerText=j.error || "Risk: %"+j.risk
 }
 
-setInterval(load,10000)
+setInterval(load,7000)
 load()
 </script>
 
