@@ -44,7 +44,7 @@ def ai_score(text):
                 "inputs": text,
                 "parameters": {"candidate_labels": ["fake news","true news"]}
             },
-            timeout=5
+            timeout=6
         )
 
         data = r.json()
@@ -57,16 +57,24 @@ def ai_score(text):
 def base_score(text):
     t = text.lower()
     s = 30
+
     if "şok" in t or "ifşa" in t: s += 25
     if "iddia" in t: s += 20
     if "gizli" in t: s += 15
     if "kanıtlandı" in t: s += 15
-    if "uzman" in t: s -= 15
+    if "sızdırıldı" in t: s += 10
+    if "uzman" in t or "rapor" in t: s -= 15
+
     return max(5, min(95, s))
 
-def risk_score(text):
+def risk_score(text, source=None):
     ai = ai_score(text)
     base = base_score(text)
+
+    # sosyal medya boost
+    if source in ["X","Reddit","TikTok","Instagram","Forum","Blog"]:
+        base += 15
+
     return int(ai*0.6 + base*0.4) if ai else base
 
 # ---------------- FILTER ----------------
@@ -74,14 +82,15 @@ def is_news(text):
     if not text:
         return False
     t = text.lower()
-    return len(t) > 40 and any(k in t for k in ["haber","iddia","son dakika","gündem"])
+    keywords = ["haber","iddia","son dakika","gündem","şok","ifşa"]
+    return len(t) > 30 and any(k in t for k in keywords)
 
 # ---------------- URL ----------------
 def extract_url(url):
     try:
-        r = requests.get(url, timeout=5)
+        r = requests.get(url, timeout=5, headers={"User-Agent":"Mozilla"})
         soup = BeautifulSoup(r.text, "html.parser")
-        return soup.title.string
+        return soup.title.string.strip()
     except:
         return None
 
@@ -105,18 +114,30 @@ def parse_rss(url, source):
         pass
     return data
 
-# ---------------- SOSYAL ----------------
-def social_feed():
-    topics = ["deprem","ekonomi","seçim","aşı","savaş","yapay zeka","kripto"]
-    words = ["şok iddia","ifşa","gizli bilgi","büyük skandal","ortaya çıktı"]
-    sources = ["X","Instagram","TikTok","Reddit","Forum","Blog"]
+# ---------------- SOSYAL GERÇEKÇİ ----------------
+def social_realistic_feed():
+    platforms = ["X","Reddit","TikTok","Instagram","Forum","Blog","Telegram"]
 
-    return [
-        (f"{random.choice(topics)} hakkında {random.choice(words)}",
-         random.choice(sources),
-         "#")
-        for _ in range(30)
+    patterns = [
+        "SON DAKİKA: {topic} hakkında şok gelişme!",
+        "{topic} hakkında gizli belge sızdırıldı iddiası",
+        "Bu video hızla yayılıyor: {topic}",
+        "{topic} hakkında gerçekler saklanıyor mu?",
+        "{topic} konusunda büyük oyun ortaya çıktı",
+        "Kimse bunu konuşmuyor: {topic}",
+        "{topic} hakkında kanıtlandığı iddia edilen bilgi"
     ]
+
+    topics = ["deprem","seçim","ekonomi","aşı","savaş","yapay zeka","kripto","gıda krizi"]
+
+    data = []
+    for _ in range(40):
+        topic = random.choice(topics)
+        text = random.choice(patterns).format(topic=topic)
+
+        data.append((text, random.choice(platforms), "#"))
+
+    return data
 
 # ---------------- DATA ----------------
 def collect():
@@ -128,7 +149,9 @@ def collect():
     data += parse_rss("https://www.hurriyet.com.tr/rss/gundem","Hürriyet")
     data += parse_rss("https://teyit.org/feed","Teyit")
     data += parse_rss("https://www.snopes.com/feed/","Snopes")
-    data += social_feed()
+
+    data += social_realistic_feed()
+
     return data
 
 # ---------------- REFRESH ----------------
@@ -140,6 +163,7 @@ def refresh():
 
     last = time.time()
     raw = collect()
+
     out = []
 
     for text, source, link in raw:
@@ -152,7 +176,7 @@ def refresh():
         if not is_news(text):
             continue
 
-        r = risk_score(text)
+        r = risk_score(text, source)
 
         if r >= 50:
             out.append({
@@ -165,7 +189,7 @@ def refresh():
         if r >= 70:
             send_email(text, r)
 
-    cache = out[:30]
+    cache = out[:40]
 
 # ---------------- API ----------------
 @app.route("/api/news")
@@ -185,7 +209,7 @@ def analyze():
             text = extract_url(text)
 
     if not text or not is_news(text):
-        return {"error":"Bu bir haber değil"}
+        return {"error":"Geçerli haber gir"}
 
     r = risk_score(text)
 
@@ -203,12 +227,13 @@ def home():
 <title>DEFANS</title>
 <style>
 body{background:#0f172a;color:white;font-family:Arial}
-.container{max-width:1100px;margin:auto;padding:20px}
+.container{max-width:1200px;margin:auto;padding:20px}
 .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
 .card{background:#1e293b;padding:20px;border-radius:16px}
-.big{grid-column:span 2}
+.big{grid-column:span 3}
 button{background:#22c55e;padding:10px;border:none}
 input{padding:10px;width:70%}
+.list{max-height:400px;overflow:auto}
 </style>
 </head>
 <body>
@@ -217,9 +242,21 @@ input{padding:10px;width:70%}
 <h1 style="color:#22c55e">DEFANS</h1>
 
 <div class="grid">
-<div class="card"><h3>AI Risk</h3><h1 id="r">-</h1></div>
-<div class="card"><h3>Kaynak</h3><h1>Sosyal + Web</h1></div>
-<div class="card"><h3>Durum</h3><h1>Aktif</h1></div>
+
+<div class="card">
+<h3>Durum</h3>
+<h1>Aktif</h1>
+</div>
+
+<div class="card">
+<h3>Kaynak</h3>
+<h1>Sosyal + Web</h1>
+</div>
+
+<div class="card">
+<h3>AI</h3>
+<h1>ON</h1>
+</div>
 
 <div class="card big">
 <input id="txt" placeholder="URL / haber / görsel / video">
@@ -227,7 +264,7 @@ input{padding:10px;width:70%}
 <h2 id="res"></h2>
 </div>
 
-<div class="card big" id="list"></div>
+<div class="card big list" id="list"></div>
 
 </div>
 </div>
@@ -271,7 +308,6 @@ load()
 </html>
 """
 
-# ---------------- RUN ----------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT",10000))
     app.run(host="0.0.0.0", port=port)
