@@ -107,11 +107,15 @@ def parse_rss(url, source):
 
 # ---------------- SOSYAL ----------------
 def social_feed():
-    topics = ["deprem","ekonomi","seçim","aşı","savaş"]
-    words = ["şok","ifşa","gizli","büyük iddia"]
+    topics = ["deprem","ekonomi","seçim","aşı","savaş","yapay zeka","kripto"]
+    words = ["şok iddia","ifşa","gizli bilgi","büyük skandal","ortaya çıktı"]
+    sources = ["X","Instagram","TikTok","Reddit","Forum","Blog"]
+
     return [
-        (f"{random.choice(topics)} hakkında {random.choice(words)}", "Sosyal Medya", "#")
-        for _ in range(20)
+        (f"{random.choice(topics)} hakkında {random.choice(words)}",
+         random.choice(sources),
+         "#")
+        for _ in range(30)
     ]
 
 # ---------------- DATA ----------------
@@ -120,7 +124,10 @@ def collect():
     data += parse_rss("https://news.google.com/rss?hl=tr&gl=TR&ceid=TR:tr","Google")
     data += parse_rss("https://www.ntv.com.tr/son-dakika.rss","NTV")
     data += parse_rss("https://www.bbc.com/turkce/index.xml","BBC")
+    data += parse_rss("https://www.trthaber.com/manset_articles.rss","TRT")
+    data += parse_rss("https://www.hurriyet.com.tr/rss/gundem","Hürriyet")
     data += parse_rss("https://teyit.org/feed","Teyit")
+    data += parse_rss("https://www.snopes.com/feed/","Snopes")
     data += social_feed()
     return data
 
@@ -133,7 +140,6 @@ def refresh():
 
     last = time.time()
     raw = collect()
-
     out = []
 
     for text, source, link in raw:
@@ -156,7 +162,6 @@ def refresh():
                 "link": link
             })
 
-        # 🔴 MAIL (70+)
         if r >= 70:
             send_email(text, r)
 
@@ -234,9 +239,11 @@ async function load(){
 
  let html=""
  j.data.forEach(x=>{
-  html+=`<div style='padding:10px'>
+  html+=`<div style='padding:10px;border-bottom:1px solid #333'>
   <a href='${x.link}' target='_blank'>${x.text}</a>
-  <br>Risk: %${x.risk} | ${x.source}
+  <br>
+  <span style="color:#22c55e">Risk: %${x.risk}</span> |
+  <span style="color:#aaa">${x.source}</span>
   </div>`
  })
 
